@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16181D">
+<title>Macro Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --ink:#16181D; --panel:#1F232B; --line:#3A404C; --muted:#8A8F9B;
+    --bone:#E8E4DA; --amber:#FFB454; --teal:#4FD6BE; --blue:#7AA5FF; --rose:#F08FA4;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--ink); color:var(--bone); font-family:'Space Grotesk',system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:430px; margin:0 auto; padding:20px 16px 90px; }
+  .mono { font-family:'IBM Plex Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+  button { font-family:inherit; border:none; cursor:pointer; }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--amber); outline-offset:2px; }
+  input { font-family:inherit; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; }
+  input[type=number] { -moz-appearance:textfield; appearance:textfield; }
+
+  .datebar { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+  .navbtn { width:42px; height:42px; border-radius:50%; background:var(--panel); color:var(--muted); font-size:20px; }
+  .navbtn:disabled { opacity:.3; }
+  .datebar .label { text-align:center; }
+  .datebar .label b { font-weight:500; }
+  .datebar .label small { display:block; color:var(--muted); letter-spacing:.15em; font-size:11px; }
+
+  .readout { background:var(--panel); border-radius:18px; padding:22px 18px 18px; margin-bottom:18px;
+             box-shadow:inset 0 1px 0 rgba(255,255,255,.04); }
+  .kcal { text-align:center; font-size:56px; font-weight:600; color:var(--amber);
+          text-shadow:0 0 24px rgba(255,180,84,.25); }
+  .kcal-label { text-align:center; font-size:10px; letter-spacing:.3em; text-transform:uppercase; color:var(--muted); margin:4px 0 18px; }
+  .macros { display:flex; }
+  .macros > div { flex:1; text-align:center; }
+  .macros > div + div { border-left:1px solid var(--line); }
+  .macros .v { font-size:22px; }
+  .macros .l { font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
+
+  .addbtn { width:100%; border-radius:14px; padding:15px; font-size:15px; font-weight:500;
+            background:var(--amber); color:var(--ink); margin-bottom:18px; }
+
+  .card { background:var(--panel); border-radius:18px; padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:14px; font-weight:500; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; }
+  .card h2 .x { background:none; color:var(--muted); font-size:12px; }
+  .field { display:block; margin-bottom:14px; }
+  .field span { display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:3px; }
+  .field .inp { display:flex; align-items:baseline; gap:6px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  .field input { width:100%; background:transparent; border:none; color:var(--bone); font-size:17px; }
+  .field .unit { color:var(--muted); font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 18px; }
+  .save { width:100%; border-radius:12px; padding:13px; font-weight:500; background:var(--amber); color:var(--ink); }
+
+  .entry { background:var(--panel); border-radius:14px; padding:12px 14px; margin-bottom:8px;
+           display:flex; align-items:center; justify-content:space-between; }
+  .entry .n { font-size:14px; font-weight:500; }
+  .entry .d { font-size:11px; color:var(--muted); margin-top:2px; }
+  .entry .del { background:none; color:var(--muted); font-size:18px; padding:4px 2px 4px 12px; }
+
+  .empty { text-align:center; color:var(--muted); font-size:14px; padding:32px 12px; }
+  .status { position:fixed; bottom:0; left:0; right:0; text-align:center; font-size:11px;
+            letter-spacing:.1em; padding:10px; color:var(--muted); background:rgba(22,24,29,.92);
+            backdrop-filter:blur(6px); }
+  .status.err { color:var(--rose); }
+  .status.ok { color:var(--teal); }
+  .hint { font-size:12px; color:var(--muted); line-height:1.5; margin-top:12px; }
+  .hint a { color:var(--amber); }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div class="status" id="status"></div>
+
+<script>
+"use strict";
+// ---------------- config ----------------
+const OWNER = "Marwan997";
+const REPO = "macro-tracker";
+const FILE = "data/log.xlsx";
+const BRANCH = "main";
+const HEADERS = ["Date","Time","Name","Calories","Protein","Carbs","Fats"];
+
+// ---------------- state ----------------
+let token = localStorage.getItem("gh_token") || "";
+let rows = [];        // [{Date,Time,Name,Calories,Protein,Carbs,Fats}]
+let sha = null;       // current blob sha of the xlsx
+let date = localToday();
+let showForm = false;
+let syncing = false;
+
+// ---------------- utils ----------------
+function localToday(d = new Date()) { return d.toLocaleDateString("en-CA"); }
+function shiftDate(ds, n) { const d = new Date(ds + "T12:00:00"); d.setDate(d.getDate()+n); return localToday(d); }
+function prettyDate(ds) {
+  const t = localToday();
+  if (ds === t) return "Today";
+  if (ds === shiftDate(t,-1)) return "Yesterday";
+  return new Date(ds+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+}
+function r1(n) { return Math.round(n*10)/10; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function setStatus(msg, cls="") { const el = document.getElementById("status"); el.textContent = msg; el.className = "status " + cls; }
+
+// ---------------- GitHub xlsx sync ----------------
+async function ghGet() {
+  const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE}?ref=${BRANCH}&t=${Date.now()}`, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" }
+  });
+  if (res.status === 401 || res.status === 403) throw new Error("auth");
+  if (!res.ok) throw new Error("load " + res.status);
+  const j = await res.json();
+  sha = j.sha;
+  const wb = XLSX.read(j.content.replace(/\n/g, ""), { type: "base64" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  rows = XLSX.utils.sheet_to_json(ws, { defval: "" }).map(r => ({
+    Date: String(r.Date), Time: String(r.Time), Name: String(r.Name),
+    Calories: +r.Calories || 0, Protein: +r.Protein || 0, Carbs: +r.Carbs || 0, Fats: +r.Fats || 0
+  }));
+}
+
+async function ghPut(message) {
+  const ws = XLSX.utils.json_to_sheet(rows, { header: HEADERS });
+  ws["!cols"] = [{wch:12},{wch:8},{wch:24},{wch:10},{wch:9},{wch:9},{wch:9}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Log");
+  const content = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+  const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE}`, {
+    method: "PUT",
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" },
+    body: JSON.stringify({ message, content, sha, branch: BRANCH })
+  });
+  if (!res.ok) throw new Error("save " + res.status);
+  const j = await res.json();
+  sha = j.content.sha;
+}
+
+async function sync(mutate, message) {
+  if (syncing) return;
+  syncing = true;
+  setStatus("Syncing…");
+  try {
+    mutate();
+    render();
+    await ghPut(message);
+    setStatus("Saved to log.xlsx ✓", "ok");
+    setTimeout(() => setStatus(""), 2000);
+  } catch (e) {
+    // sha conflict or network issue: re-pull truth and let the user retry
+    setStatus("Save failed — reloading log. Try again.", "err");
+    try { await ghGet(); } catch {}
+    render();
+  }
+  syncing = false;
+}
+
+// ---------------- views ----------------
+function render() {
+  const app = document.getElementById("app");
+  if (!token) { app.innerHTML = setupView(); return; }
+  const day = rows.filter(r => r.Date === date);
+  const t = day.reduce((a,r) => ({c:a.c+r.Calories, p:a.p+r.Protein, cb:a.cb+r.Carbs, f:a.f+r.Fats}), {c:0,p:0,cb:0,f:0});
+  app.innerHTML = `
+    <div class="datebar">
+      <button class="navbtn" onclick="nav(-1)" aria-label="Previous day">‹</button>
+      <div class="label"><b>${prettyDate(date)}</b><small>${date}</small></div>
+      <button class="navbtn" onclick="nav(1)" ${date===localToday()?"disabled":""} aria-label="Next day">›</button>
+    </div>
+    <div class="readout">
+      <div class="kcal mono">${Math.round(t.c)}</div>
+      <div class="kcal-label">kcal today</div>
+      <div class="macros">
+        <div><div class="v mono" style="color:var(--teal)">${r1(t.p)}</div><div class="l">Protein g</div></div>
+        <div><div class="v mono" style="color:var(--blue)">${r1(t.cb)}</div><div class="l">Carbs g</div></div>
+        <div><div class="v mono" style="color:var(--rose)">${r1(t.f)}</div><div class="l">Fats g</div></div>
+      </div>
+    </div>
+    ${showForm ? formView() : `<button class="addbtn" onclick="openForm()">＋ Add entry</button>`}
+    ${day.length === 0 && !showForm
+      ? `<div class="empty">Nothing logged for this day yet.</div>`
+      : day.map(entryView).join("")}
+  `;
+}
+
+function entryView(r) {
+  const i = rows.indexOf(r);
+  return `<div class="entry">
+    <div>
+      <div class="n">${esc(r.Name)}</div>
+      <div class="d mono">${Math.round(r.Calories)} kcal · P ${r.Protein} · C ${r.Carbs} · F ${r.Fats} · ${esc(r.Time)}</div>
+    </div>
+    <button class="del" onclick="delEntry(${i})" aria-label="Delete ${esc(r.Name)}">×</button>
+  </div>`;
+}
+
+function formView() {
+  return `<div class="card">
+    <h2>New entry <button class="x" onclick="closeForm()">Cancel</button></h2>
+    <label class="field"><span>Name (optional)</span>
+      <div class="inp"><input id="f_name" placeholder="e.g. Greek yogurt"></div></label>
+    <div class="grid2">
+      ${numField("f_cal","Calories","kcal")}
+      ${numField("f_pro","Protein","g")}
+      ${numField("f_carb","Carbs","g")}
+      ${numField("f_fat","Fats","g")}
+    </div>
+    ${numField("f_srv","Servings eaten","×","1")}
+    <button class="save" onclick="saveEntry()">Add to ${prettyDate(date).toLowerCase()}</button>
+  </div>`;
+}
+
+function numField(id,label,unit,val="") {
+  return `<label class="field"><span>${label}</span>
+    <div class="inp"><input id="${id}" type="number" inputmode="decimal" placeholder="0" value="${val}">
+    <span class="unit">${unit}</span></div></label>`;
+}
+
+function setupView() {
+  return `<div class="card" style="margin-top:40px">
+    <h2>Connect to your log</h2>
+    <p class="hint" style="margin:0 0 14px">This app stores every entry in <b>data/log.xlsx</b> inside your
+    <b>${OWNER}/${REPO}</b> repo. Paste a GitHub token with read/write access to that repo's contents.
+    It's saved only on this device.</p>
+    <label class="field"><span>GitHub token</span>
+      <div class="inp"><input id="f_token" type="password" placeholder="github_pat_…"></div></label>
+    <button class="save" onclick="saveToken()">Connect</button>
+    <p class="hint">Create one at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings</a>
+    → fine-grained token → only this repo → Contents: read &amp; write.</p>
+  </div>`;
+}
+
+// ---------------- actions ----------------
+window.nav = (n) => { date = shiftDate(date, n); showForm = false; render(); };
+window.openForm = () => { showForm = true; render(); document.getElementById("f_name")?.focus(); };
+window.closeForm = () => { showForm = false; render(); };
+window.saveEntry = () => {
+  const v = id => parseFloat(document.getElementById(id).value) || 0;
+  const s = v("f_srv") || 1;
+  const entry = {
+    Date: date,
+    Time: new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}),
+    Name: document.getElementById("f_name").value.trim() || "Entry",
+    Calories: r1(v("f_cal")*s), Protein: r1(v("f_pro")*s),
+    Carbs: r1(v("f_carb")*s), Fats: r1(v("f_fat")*s)
+  };
+  showForm = false;
+  sync(() => rows.push(entry), `Log: ${entry.Name} (${entry.Date})`);
+};
+window.delEntry = (i) => {
+  const name = rows[i]?.Name || "entry";
+  sync(() => rows.splice(i, 1), `Remove: ${name}`);
+};
+window.saveToken = async () => {
+  token = document.getElementById("f_token").value.trim();
+  if (!token) return;
+  localStorage.setItem("gh_token", token);
+  boot();
+};
+
+// ---------------- boot ----------------
+async function boot() {
+  render();
+  if (!token) return;
+  setStatus("Loading log.xlsx…");
+  try {
+    await ghGet();
+    setStatus("");
+  } catch (e) {
+    if (e.message === "auth") {
+      localStorage.removeItem("gh_token"); token = "";
+      setStatus("Token rejected — paste a valid one.", "err");
+    } else {
+      setStatus("Couldn't load the log. Check connection and refresh.", "err");
+    }
+  }
+  render();
+}
+boot();
+</script>
+</body>
+</html>
